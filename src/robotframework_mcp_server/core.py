@@ -8,7 +8,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-from urllib.request import urlopen
+from urllib.request import HTTPRedirectHandler, build_opener, urlopen
 from xml.etree import ElementTree
 
 import yaml
@@ -256,6 +256,11 @@ def analyse_project(project_path: str) -> dict[str, Any]:
     }
 
 
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        raise ValueError("Redirects are not allowed when fetching Swagger definitions")
+
+
 def _assert_safe_swagger_url(swagger_url: str, allow_private_urls: bool) -> None:
     parsed = urlparse(swagger_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -292,7 +297,8 @@ def _assert_safe_swagger_url(swagger_url: str, allow_private_urls: bool) -> None
 
 def _read_swagger_document(swagger_url: str, allow_private_urls: bool = False, timeout: float = 15.0) -> dict[str, Any]:
     _assert_safe_swagger_url(swagger_url, allow_private_urls=allow_private_urls)
-    with urlopen(swagger_url, timeout=timeout) as response:  # noqa: S310 - validated URL with explicit timeout.
+    opener = build_opener(_NoRedirectHandler())
+    with opener.open(swagger_url, timeout=timeout) as response:  # noqa: S310 - validated URL with explicit timeout and redirects disabled.
         payload = response.read().decode("utf-8")
         content_type = response.headers.get("Content-Type", "")
     if "json" in content_type:
@@ -332,7 +338,15 @@ def _operation_name(method: str, path: str, operation: dict[str, Any]) -> str:
 
 def _response_schema(document: dict[str, Any], operation: dict[str, Any]) -> dict[str, Any]:
     responses = operation.get("responses") or {}
-    for status_code in sorted(responses):
+    preferred_codes = ("200", "201", "202", "203", "204", "205", "206")
+    ordered_status_codes = [
+        status_code for status_code in preferred_codes if status_code in responses
+    ] + [
+        status_code
+        for status_code in responses
+        if str(status_code).startswith("2") and status_code not in preferred_codes
+    ]
+    for status_code in ordered_status_codes:
         if str(status_code).startswith("2"):
             response = responses[status_code]
             content = response.get("content") or {}
@@ -401,7 +415,7 @@ def generate_from_swagger_url(
             schema_var = f"${{{operation_slug.replace('-', '_').upper()}_SCHEMA_PATH}}"
             schema = _response_schema(document, operation)
             schema_files[schema_path] = json.dumps(schema, indent=2, sort_keys=True) + "\n"
-            variable_lines.append(f"{schema_var}    ${{CURDIR}}${{/}}..${{/}}{schema_path.replace('/', '${/}')}")
+            variable_lines.append(f"{schema_var}    ${{CURDIR}}${{/}}..${{/}}..${{/}}{schema_path.replace('/', '${/}')}")
             keyword_lines.append(f"When client sends {method.upper()} request to {robot_path} using ${{session_alias}}")
             keyword_lines.append(f"    ${{response}}=    {method.upper()} On Session    ${{session_alias}}    {robot_path}")
             keyword_lines.append("    RETURN    ${response}")

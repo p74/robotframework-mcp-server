@@ -7,7 +7,7 @@ import threading
 import unittest
 import zipfile
 from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -164,6 +164,7 @@ class SwaggerGenerationTests(unittest.TestCase):
 
         self.assertIn("*** Settings ***", resource)
         self.assertIn("Library    RequestsLibrary", resource)
+        self.assertIn("${LIST_PETS_SCHEMA_PATH}    ${CURDIR}${/}..${/}..${/}schemas${/}list-pets.schema.json", resource)
         self.assertIn("When client sends GET request to /pets using ${session_alias}", resource)
         self.assertIn("Then response for List Pets matches schema ${response}", resource)
         self.assertIn("    ${payload}=    Evaluate    $response.json()", resource)
@@ -199,6 +200,31 @@ class SwaggerGenerationTests(unittest.TestCase):
             validator.response_should_match_schema(None, {"type": "integer"})
         with self.assertRaises(AssertionError):
             validator.response_should_match_schema([], {"type": "object"})
+
+    def test_generate_from_swagger_url_rejects_redirects(self) -> None:
+        class RedirectHandler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                self.send_response(302)
+                self.send_header("Location", "/swagger.json")
+                self.end_headers()
+
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with self.assertRaises(ValueError):
+                generate_from_swagger_url(
+                    f"http://127.0.0.1:{server.server_port}/redirect",
+                    suite_name="Redirect API",
+                    allow_private_urls=True,
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
 
 
 class ServerRegistrationTests(unittest.TestCase):
