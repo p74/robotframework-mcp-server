@@ -404,8 +404,10 @@ def generate_from_swagger_url(
 
     for path, path_item in paths.items():
         robot_path = _robotise_path(path)
+        if not isinstance(path_item, dict):
+            continue
         for method in _HTTP_METHODS:
-            operation = (path_item or {}).get(method)
+            operation = path_item.get(method)
             if not isinstance(operation, dict):
                 continue
             operation_name = _operation_name(method, path, operation)
@@ -421,7 +423,7 @@ def generate_from_swagger_url(
             keyword_lines.append("    RETURN    ${response}")
             keyword_lines.append("")
             keyword_lines.append(f"Then response for {operation_title} matches schema ${{response}}")
-            keyword_lines.append("    ${payload}=    Evaluate    $response.json()")
+            keyword_lines.append("    ${payload}=    Evaluate    ${response}.json()")
             keyword_lines.append(f"    Response Should Match Schema File    ${{payload}}    {schema_var}")
             keyword_lines.append("")
             suite_lines.append(f"Scenario: {operation_title}")

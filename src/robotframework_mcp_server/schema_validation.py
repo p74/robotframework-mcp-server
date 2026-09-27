@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
+import numbers
 from pathlib import Path
 from typing import Any
 
@@ -60,7 +62,9 @@ class SchemaValidationLibrary:
             raise AssertionError(f"{path} expected string but got {type(payload).__name__}")
         if schema_type == "integer" and (isinstance(payload, bool) or not isinstance(payload, int)):
             raise AssertionError(f"{path} expected integer but got {type(payload).__name__}")
-        if schema_type == "number" and (isinstance(payload, bool) or not isinstance(payload, (int, float))):
+        if schema_type == "number" and (
+            isinstance(payload, bool) or not isinstance(payload, (numbers.Real, Decimal))
+        ):
             raise AssertionError(f"{path} expected number but got {type(payload).__name__}")
         if schema_type == "boolean" and not isinstance(payload, bool):
             raise AssertionError(f"{path} expected boolean but got {type(payload).__name__}")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 import sys
 import tempfile
 import threading
@@ -167,7 +168,7 @@ class SwaggerGenerationTests(unittest.TestCase):
         self.assertIn("${LIST_PETS_SCHEMA_PATH}    ${CURDIR}${/}..${/}..${/}schemas${/}list-pets.schema.json", resource)
         self.assertIn("When client sends GET request to /pets using ${session_alias}", resource)
         self.assertIn("Then response for List Pets matches schema ${response}", resource)
-        self.assertIn("    ${payload}=    Evaluate    $response.json()", resource)
+        self.assertIn("    ${payload}=    Evaluate    ${response}.json()", resource)
         self.assertIn("Response Should Match Schema File", resource)
         self.assertIn("Scenario: List Pets", suite)
         self.assertIn("${response}=    When client sends GET request to /pets using api", suite)
@@ -200,6 +201,7 @@ class SwaggerGenerationTests(unittest.TestCase):
             validator.response_should_match_schema(None, {"type": "integer"})
         with self.assertRaises(AssertionError):
             validator.response_should_match_schema([], {"type": "object"})
+        validator.response_should_match_schema(Decimal("1.5"), {"type": "number"})
 
     def test_generate_from_swagger_url_rejects_redirects(self) -> None:
         class RedirectHandler(BaseHTTPRequestHandler):
@@ -225,6 +227,43 @@ class SwaggerGenerationTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join()
+
+    def test_generate_from_swagger_url_skips_non_object_path_items(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            spec_path = root / "swagger.json"
+            spec_path.write_text(
+                json.dumps(
+                    {
+                        "openapi": "3.0.0",
+                        "paths": {
+                            "/broken": "invalid",
+                            "/pets": {
+                                "get": {
+                                    "operationId": "listPets",
+                                    "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"type": "object"}}}}},
+                                }
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(root)))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                result = generate_from_swagger_url(
+                    f"http://127.0.0.1:{server.server_port}/swagger.json",
+                    suite_name="Pet API",
+                    allow_private_urls=True,
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
+
+        self.assertEqual(result["operations"], ["listPets"])
 
 
 class ServerRegistrationTests(unittest.TestCase):
