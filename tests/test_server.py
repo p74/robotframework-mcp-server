@@ -165,7 +165,9 @@ class SwaggerGenerationTests(unittest.TestCase):
 
         self.assertIn("*** Settings ***", resource)
         self.assertIn("Library    RequestsLibrary", resource)
+        self.assertIn("libraries/SchemaValidationLibrary.py", result["files"])
         self.assertIn("${LIST_PETS_SCHEMA_PATH}    ${CURDIR}${/}..${/}schemas${/}list-pets.schema.json", resource)
+        self.assertIn("Library    ../libraries/SchemaValidationLibrary.py", resource)
         self.assertIn("When client sends GET request to /pets using ${session_alias}", resource)
         self.assertIn("Then response for List Pets matches schema ${response}", resource)
         self.assertIn("    ${payload}=    Evaluate    ${response}.json()", resource)
@@ -265,6 +267,46 @@ class SwaggerGenerationTests(unittest.TestCase):
                 thread.join()
 
         self.assertEqual(result["operations"], ["listPets"])
+
+    def test_generate_from_swagger_url_adds_arguments_for_path_parameters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            spec_path = root / "swagger.json"
+            spec_path.write_text(
+                json.dumps(
+                    {
+                        "openapi": "3.0.0",
+                        "paths": {
+                            "/orders/{orderId}": {
+                                "get": {
+                                    "operationId": "getOrder",
+                                    "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"type": "object"}}}}},
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(root)))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                result = generate_from_swagger_url(
+                    f"http://127.0.0.1:{server.server_port}/swagger.json",
+                    suite_name="Orders API",
+                    allow_private_urls=True,
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
+
+        resource = result["files"]["resources/OrdersApi.resource"]
+        suite = result["files"]["tests/orders-api.robot"]
+        self.assertIn("When client sends GET request to /orders/{orderId} using ${session_alias}", resource)
+        self.assertIn("[Arguments]    ${orderId}", resource)
+        self.assertIn("${response}=    When client sends GET request to /orders/{orderId} using api    sample_orderId", suite)
 
     def test_generate_from_swagger_url_rejects_cyclic_schema_references(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
