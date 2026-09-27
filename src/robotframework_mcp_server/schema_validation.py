@@ -24,8 +24,10 @@ class SchemaValidationLibrary:
         schema_types = schema_type if isinstance(schema_type, list) else [schema_type] if schema_type else []
         if payload is None and (schema.get("nullable") or "null" in schema_types):
             return
-        if "oneOf" in schema and not any(self._matches(payload, option, path) for option in schema["oneOf"]):
-            raise AssertionError(f"{path} did not satisfy any oneOf schema option")
+        if "oneOf" in schema:
+            match_count = sum(1 for option in schema["oneOf"] if self._matches(payload, option, path))
+            if match_count != 1:
+                raise AssertionError(f"{path} must satisfy exactly one oneOf schema option")
         if "anyOf" in schema and not any(self._matches(payload, option, path) for option in schema["anyOf"]):
             raise AssertionError(f"{path} did not satisfy any anyOf schema option")
         if "allOf" in schema:

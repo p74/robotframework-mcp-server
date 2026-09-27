@@ -203,6 +203,8 @@ class SwaggerGenerationTests(unittest.TestCase):
             validator.response_should_match_schema(None, {"type": "integer"})
         with self.assertRaises(AssertionError):
             validator.response_should_match_schema([], {"type": "object"})
+        with self.assertRaises(AssertionError):
+            validator.response_should_match_schema(1, {"oneOf": [{"type": "integer"}, {"type": "number"}]})
         validator.response_should_match_schema("ok", {"type": "string"})
         validator.response_should_match_schema(Decimal("1.5"), {"type": "number"})
 

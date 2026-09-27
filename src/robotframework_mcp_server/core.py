@@ -6,9 +6,9 @@ import re
 import socket
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, build_opener, urlopen
+from urllib.request import HTTPRedirectHandler, build_opener
 from xml.etree import ElementTree
 
 import yaml
@@ -16,79 +16,6 @@ import yaml
 SCANNABLE_EXTENSIONS = {".robot", ".resource", ".txt", ".md", ".docx", ".xlsx", ".xlsm"}
 _GHERKIN_PREFIXES = ("Given ", "When ", "Then ", "And ", "But ")
 _HTTP_METHODS = ("get", "post", "put", "patch", "delete", "options", "head")
-GENERATED_SCHEMA_LIBRARY = """from __future__ import annotations
-
-import json
-from decimal import Decimal
-import numbers
-from pathlib import Path
-from typing import Any
-
-
-class SchemaValidationLibrary:
-    def response_should_match_schema_file(self, payload: Any, schema_path: str) -> None:
-        schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
-        self.response_should_match_schema(payload, schema)
-
-    def response_should_match_schema(self, payload: Any, schema: Any) -> None:
-        self._validate(payload, schema, path="$")
-
-    def _validate(self, payload: Any, schema: Any, path: str) -> None:
-        if not isinstance(schema, dict):
-            return
-        schema_type = schema.get("type")
-        schema_types = schema_type if isinstance(schema_type, list) else [schema_type] if schema_type else []
-        if payload is None and (schema.get("nullable") or "null" in schema_types):
-            return
-        if "oneOf" in schema and not any(self._matches(payload, option, path) for option in schema["oneOf"]):
-            raise AssertionError(f"{path} did not satisfy any oneOf schema option")
-        if "anyOf" in schema and not any(self._matches(payload, option, path) for option in schema["anyOf"]):
-            raise AssertionError(f"{path} did not satisfy any anyOf schema option")
-        if "allOf" in schema:
-            for option in schema["allOf"]:
-                self._validate(payload, option, path)
-        if "enum" in schema and payload not in schema["enum"]:
-            raise AssertionError(f"{path} expected one of {schema['enum']!r} but got {payload!r}")
-
-        if isinstance(schema_type, list):
-            non_null_types = [item for item in schema_type if item != "null"]
-            schema_type = non_null_types[0] if non_null_types else None
-
-        if schema_type == "object" or schema.get("properties") or schema.get("required"):
-            if not isinstance(payload, dict):
-                raise AssertionError(f"{path} expected object but got {type(payload).__name__}")
-            for required_name in schema.get("required", []):
-                if required_name not in payload:
-                    raise AssertionError(f"{path}.{required_name} is required")
-            for name, child_schema in schema.get("properties", {}).items():
-                if name in payload:
-                    self._validate(payload[name], child_schema, f"{path}.{name}")
-            return
-
-        if schema_type == "array":
-            if not isinstance(payload, list):
-                raise AssertionError(f"{path} expected array but got {type(payload).__name__}")
-            item_schema = schema.get("items", {})
-            for index, item in enumerate(payload):
-                self._validate(item, item_schema, f"{path}[{index}]")
-            return
-
-        if schema_type == "string" and not isinstance(payload, str):
-            raise AssertionError(f"{path} expected string but got {type(payload).__name__}")
-        if schema_type == "integer" and (isinstance(payload, bool) or not isinstance(payload, int)):
-            raise AssertionError(f"{path} expected integer but got {type(payload).__name__}")
-        if schema_type == "number" and (isinstance(payload, bool) or not isinstance(payload, (numbers.Real, Decimal))):
-            raise AssertionError(f"{path} expected number but got {type(payload).__name__}")
-        if schema_type == "boolean" and not isinstance(payload, bool):
-            raise AssertionError(f"{path} expected boolean but got {type(payload).__name__}")
-
-    def _matches(self, payload: Any, schema: Any, path: str) -> bool:
-        try:
-            self._validate(payload, schema, path)
-        except AssertionError:
-            return False
-        return True
-"""
 
 
 def _split_words(value: str) -> str:
@@ -128,6 +55,10 @@ def _example_step(step: str) -> str:
 
 def _robotise_path(path: str) -> str:
     return re.sub(r"\{([A-Za-z0-9_]+)\}", r"${\1}", path)
+
+
+def _path_parameters(path: str) -> list[str]:
+    return re.findall(r"\{([A-Za-z0-9_]+)\}", path)
 
 
 def _locator_name(page_name: str, step: str, index: int) -> str:
@@ -308,14 +239,18 @@ def analyse_project(project_path: str) -> dict[str, Any]:
             warnings.append(f"Skipped legacy Excel file without parser support: {path}")
             continue
         scanned_files += 1
-        if path.suffix.lower() in {".robot", ".resource"}:
-            keywords = _extract_robot_keywords(path.read_text(encoding="utf-8").splitlines())
-        elif path.suffix.lower() in {".txt", ".md"}:
-            keywords = _extract_text_keywords(path.read_text(encoding="utf-8").splitlines())
-        elif path.suffix.lower() == ".docx":
-            keywords = _extract_text_keywords(_read_docx_lines(path))
-        else:
-            keywords = _extract_text_keywords(_read_xlsx_lines(path))
+        try:
+            if path.suffix.lower() in {".robot", ".resource"}:
+                keywords = _extract_robot_keywords(path.read_text(encoding="utf-8").splitlines())
+            elif path.suffix.lower() in {".txt", ".md"}:
+                keywords = _extract_text_keywords(path.read_text(encoding="utf-8").splitlines())
+            elif path.suffix.lower() == ".docx":
+                keywords = _extract_text_keywords(_read_docx_lines(path))
+            else:
+                keywords = _extract_text_keywords(_read_xlsx_lines(path))
+        except (KeyError, UnicodeDecodeError, zipfile.BadZipFile, ElementTree.ParseError) as error:
+            warnings.append(f"Skipped unreadable file {path}: {error}")
+            continue
         if keywords:
             relative = str(path.relative_to(root))
             unique_keywords = sorted(dict.fromkeys(keywords))
@@ -332,23 +267,27 @@ def analyse_project(project_path: str) -> dict[str, Any]:
 
 
 class _NoRedirectHandler(HTTPRedirectHandler):
-    def _reject_redirect(self, code: int) -> None:
+    def _reject_redirect(self) -> NoReturn:
         raise ValueError("Redirects are not allowed when fetching Swagger definitions")
 
     def http_error_301(self, req, fp, code, msg, headers):  # type: ignore[override]
-        self._reject_redirect(code)
+        self._reject_redirect()
 
     def http_error_302(self, req, fp, code, msg, headers):  # type: ignore[override]
-        self._reject_redirect(code)
+        self._reject_redirect()
 
     def http_error_303(self, req, fp, code, msg, headers):  # type: ignore[override]
-        self._reject_redirect(code)
+        self._reject_redirect()
 
     def http_error_307(self, req, fp, code, msg, headers):  # type: ignore[override]
-        self._reject_redirect(code)
+        self._reject_redirect()
 
     def http_error_308(self, req, fp, code, msg, headers):  # type: ignore[override]
-        self._reject_redirect(code)
+        self._reject_redirect()
+
+
+def _generated_schema_library_source() -> str:
+    return Path(__file__).with_name("schema_validation.py").read_text(encoding="utf-8")
 
 
 def _assert_safe_swagger_url(swagger_url: str, allow_private_urls: bool) -> None:
@@ -388,7 +327,7 @@ def _assert_safe_swagger_url(swagger_url: str, allow_private_urls: bool) -> None
 def _read_swagger_document(swagger_url: str, allow_private_urls: bool = False, timeout: float = 15.0) -> dict[str, Any]:
     _assert_safe_swagger_url(swagger_url, allow_private_urls=allow_private_urls)
     opener = build_opener(_NoRedirectHandler())
-    with opener.open(swagger_url, timeout=timeout) as response:  # noqa: S310 - validated URL with explicit timeout and redirects disabled.
+    with opener.open(swagger_url, timeout=timeout) as response:  # noqa: S310
         payload = response.read().decode(response.headers.get_content_charset() or "utf-8")
         content_type = response.headers.get("Content-Type", "")
     if "json" in content_type:
@@ -422,11 +361,7 @@ def _dereference_schema(document: dict[str, Any], schema: Any, seen_references: 
             reference = schema["$ref"]
             if reference in seen_references:
                 raise ValueError(f"Cyclic schema reference detected: {reference}")
-            return _dereference_schema(
-                document,
-                _resolve_reference(document, reference),
-                seen_references | {reference},
-            )
+            return _dereference_schema(document, _resolve_reference(document, reference), seen_references | {reference})
         return {key: _dereference_schema(document, value, seen_references) for key, value in schema.items()}
     if isinstance(schema, list):
         return [_dereference_schema(document, item, seen_references) for item in schema]
@@ -440,28 +375,30 @@ def _operation_name(method: str, path: str, operation: dict[str, Any]) -> str:
 def _response_schema(document: dict[str, Any], operation: dict[str, Any]) -> dict[str, Any]:
     responses = operation.get("responses") or {}
     preferred_codes = ("200", "201", "202", "203", "204", "205", "206")
-    ordered_status_codes = [
-        status_code for status_code in preferred_codes if status_code in responses
-    ] + [
-        status_code
-        for status_code in responses
-        if str(status_code).startswith("2") and status_code not in preferred_codes
+    ordered_status_codes = [code for code in preferred_codes if code in responses] + [
+        code for code in responses if str(code).startswith("2") and code not in preferred_codes
     ]
     for status_code in ordered_status_codes:
-        if str(status_code).startswith("2"):
-            response = responses[status_code]
-            content = response.get("content") or {}
-            if "application/json" in content:
-                schema = content["application/json"].get("schema")
-                if schema:
-                    return _dereference_schema(document, schema)
-            if "schema" in response:
-                return _dereference_schema(document, response["schema"])
+        response = responses[status_code]
+        content = response.get("content") or {}
+        if "application/json" in content:
+            schema = content["application/json"].get("schema")
+            if schema:
+                return _dereference_schema(document, schema)
+        if "schema" in response:
+            return _dereference_schema(document, response["schema"])
     return {"type": "object"}
 
 
-def _path_parameters(path: str) -> list[str]:
-    return re.findall(r"\{([A-Za-z0-9_]+)\}", path)
+def _operation_parameters(path_item: dict[str, Any], operation: dict[str, Any]) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for parameter in path_item.get("parameters", []):
+        if isinstance(parameter, dict) and {"name", "in"} <= parameter.keys():
+            merged[(parameter["name"], parameter["in"])] = parameter
+    for parameter in operation.get("parameters", []):
+        if isinstance(parameter, dict) and {"name", "in"} <= parameter.keys():
+            merged[(parameter["name"], parameter["in"])] = parameter
+    return list(merged.values())
 
 
 def generate_from_swagger_url(
@@ -490,6 +427,7 @@ def generate_from_swagger_url(
     ]
     settings_lines = [
         "*** Settings ***",
+        "Library    Collections",
         "Library    RequestsLibrary",
         "Library    ../libraries/SchemaValidationLibrary.py",
     ]
@@ -508,7 +446,6 @@ def generate_from_swagger_url(
     generated_operations: list[str] = []
 
     for path, path_item in paths.items():
-        path_parameters = _path_parameters(path)
         if not isinstance(path_item, dict):
             continue
         for method in _HTTP_METHODS:
@@ -516,6 +453,16 @@ def generate_from_swagger_url(
             if not isinstance(operation, dict):
                 continue
             request_path = _robotise_path(path)
+            template_path_parameters = _path_parameters(path)
+            parameters = _operation_parameters(path_item, operation)
+            path_parameter_names = list(dict.fromkeys(template_path_parameters + [parameter["name"] for parameter in parameters if parameter.get("in") == "path"]))
+            query_parameters = [parameter for parameter in parameters if parameter.get("in") == "query"]
+            header_parameters = [parameter for parameter in parameters if parameter.get("in") == "header"]
+            argument_names: list[str] = []
+            for parameter in path_parameter_names + [parameter["name"] for parameter in query_parameters + header_parameters]:
+                if parameter not in argument_names:
+                    argument_names.append(parameter)
+
             operation_name = _operation_name(method, path, operation)
             operation_slug = slugify(operation_name)
             operation_title = titleize(operation_name)
@@ -525,20 +472,34 @@ def generate_from_swagger_url(
             schema_files[schema_path] = json.dumps(schema, indent=2, sort_keys=True) + "\n"
             variable_lines.append(f"{schema_var}    ${{CURDIR}}${{/}}..${{/}}{schema_path.replace('/', '${/}')}")
             keyword_lines.append(f"When client sends {method.upper()} request to {path} using ${{session_alias}}")
-            if path_parameters:
-                keyword_lines.append("    [Arguments]    " + "    ".join(f"${{{parameter}}}" for parameter in path_parameters))
-            keyword_lines.append(f"    ${{response}}=    {method.upper()} On Session    ${{session_alias}}    {request_path}")
+            if argument_names:
+                keyword_lines.append("    [Arguments]    " + "    ".join(f"${{{argument}}}" for argument in argument_names))
+            if query_parameters:
+                keyword_lines.append("    ${params}=    Create Dictionary")
+                for parameter in query_parameters:
+                    keyword_lines.append(f"    Set To Dictionary    ${{params}}    {parameter['name']}=${{{parameter['name']}}}")
+            if header_parameters:
+                keyword_lines.append("    ${headers}=    Create Dictionary")
+                for parameter in header_parameters:
+                    keyword_lines.append(f"    Set To Dictionary    ${{headers}}    {parameter['name']}=${{{parameter['name']}}}")
+            request_line = f"    ${{response}}=    {method.upper()} On Session    ${{session_alias}}    {request_path}"
+            if query_parameters:
+                request_line += "    params=${params}"
+            if header_parameters:
+                request_line += "    headers=${headers}"
+            keyword_lines.append(request_line)
             keyword_lines.append("    RETURN    ${response}")
             keyword_lines.append("")
             keyword_lines.append(f"Then response for {operation_title} matches schema ${{response}}")
             keyword_lines.append("    ${payload}=    Evaluate    ${response}.json()")
             keyword_lines.append(f"    Response Should Match Schema File    ${{payload}}    {schema_var}")
             keyword_lines.append("")
+
             suite_lines.append(f"Scenario: {operation_title}")
             suite_lines.append("    Given API session api is available")
             suite_call = f"    ${{response}}=    When client sends {method.upper()} request to {path} using api"
-            if path_parameters:
-                suite_call += "".join(f"    sample_{parameter}" for parameter in path_parameters)
+            if argument_names:
+                suite_call += "".join(f"    sample_{argument}" for argument in argument_names)
             suite_lines.append(suite_call)
             suite_lines.append(f"    Then response for {operation_title} matches schema ${{response}}")
             suite_lines.append("")
@@ -551,7 +512,7 @@ def generate_from_swagger_url(
     files = {
         f"tests/{suite_slug}.robot": "\n".join(suite_lines).strip() + "\n",
         f"resources/{suite_stub}.resource": resource_content,
-        "libraries/SchemaValidationLibrary.py": GENERATED_SCHEMA_LIBRARY,
+        "libraries/SchemaValidationLibrary.py": _generated_schema_library_source(),
     }
     files.update(schema_files)
     return {
