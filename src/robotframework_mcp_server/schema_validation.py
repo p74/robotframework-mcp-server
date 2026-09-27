@@ -55,14 +55,14 @@ class SchemaValidationLibrary:
                 self._validate(item, item_schema, f"{path}[{index}]")
             return
 
-        type_map = {
-            "string": str,
-            "integer": int,
-            "number": (int, float),
-            "boolean": bool,
-        }
-        if schema_type in type_map and not isinstance(payload, type_map[schema_type]):
-            raise AssertionError(f"{path} expected {schema_type} but got {type(payload).__name__}")
+        if schema_type == "string" and not isinstance(payload, str):
+            raise AssertionError(f"{path} expected string but got {type(payload).__name__}")
+        if schema_type == "integer" and (isinstance(payload, bool) or not isinstance(payload, int)):
+            raise AssertionError(f"{path} expected integer but got {type(payload).__name__}")
+        if schema_type == "number" and (isinstance(payload, bool) or not isinstance(payload, (int, float))):
+            raise AssertionError(f"{path} expected number but got {type(payload).__name__}")
+        if schema_type == "boolean" and not isinstance(payload, bool):
+            raise AssertionError(f"{path} expected boolean but got {type(payload).__name__}")
 
     def _matches(self, payload: Any, schema: Any, path: str) -> bool:
         try:

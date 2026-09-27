@@ -21,7 +21,15 @@ def create_server() -> MCPServer:
         return analyse_project(project_path=project_path)
 
     @server.tool(name="generate_from_swagger_url", description="Generate Robot Framework API suites and schema files from a Swagger or OpenAPI URL.")
-    def swagger_generation(swagger_url: str, suite_name: str = "Generated API Suite") -> dict:
-        return generate_from_swagger_url(swagger_url=swagger_url, suite_name=suite_name)
+    def swagger_generation(
+        swagger_url: str,
+        suite_name: str = "Generated API Suite",
+        allow_private_urls: bool = False,
+    ) -> dict:
+        return generate_from_swagger_url(
+            swagger_url=swagger_url,
+            suite_name=suite_name,
+            allow_private_urls=allow_private_urls,
+        )
 
     return server

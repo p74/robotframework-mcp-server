@@ -146,7 +146,13 @@ class SwaggerGenerationTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                result = generate_from_swagger_url(f"http://127.0.0.1:{server.server_port}/swagger.json", suite_name="Pet API")
+                with self.assertRaises(ValueError):
+                    generate_from_swagger_url(f"http://127.0.0.1:{server.server_port}/swagger.json", suite_name="Pet API")
+                result = generate_from_swagger_url(
+                    f"http://127.0.0.1:{server.server_port}/swagger.json",
+                    suite_name="Pet API",
+                    allow_private_urls=True,
+                )
             finally:
                 server.shutdown()
                 server.server_close()
@@ -156,6 +162,8 @@ class SwaggerGenerationTests(unittest.TestCase):
         suite = result["files"]["tests/pet-api.robot"]
         schema_text = result["files"]["schemas/list-pets.schema.json"]
 
+        self.assertIn("*** Settings ***", resource)
+        self.assertIn("Library    RequestsLibrary", resource)
         self.assertIn("When client sends GET request to /pets using ${session_alias}", resource)
         self.assertIn("Then response for List Pets matches schema ${response}", resource)
         self.assertIn("    ${payload}=    Evaluate    $response.json()", resource)
@@ -184,6 +192,8 @@ class SwaggerGenerationTests(unittest.TestCase):
                 [{"id": "wrong"}],
                 {"type": "array", "items": {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}}}},
             )
+        with self.assertRaises(AssertionError):
+            validator.response_should_match_schema(True, {"type": "integer"})
 
 
 class ServerRegistrationTests(unittest.TestCase):

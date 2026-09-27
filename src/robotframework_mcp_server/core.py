@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import re
+import socket
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -254,8 +256,36 @@ def analyse_project(project_path: str) -> dict[str, Any]:
     }
 
 
-def _read_swagger_document(swagger_url: str) -> dict[str, Any]:
-    with urlopen(swagger_url) as response:  # noqa: S310 - MCP tool accepts explicit user URL input.
+def _assert_safe_swagger_url(swagger_url: str, allow_private_urls: bool) -> None:
+    parsed = urlparse(swagger_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Swagger URL must use http or https with an explicit host")
+    if allow_private_urls:
+        return
+
+    try:
+        resolved = {entry[4][0] for entry in socket.getaddrinfo(parsed.hostname, parsed.port or 80, proto=socket.IPPROTO_TCP)}
+    except socket.gaierror as error:
+        raise ValueError(f"Unable to resolve Swagger URL host: {parsed.hostname}") from error
+
+    for address_text in resolved:
+        address = ipaddress.ip_address(address_text)
+        if any(
+            (
+                address.is_private,
+                address.is_loopback,
+                address.is_link_local,
+                address.is_multicast,
+                address.is_reserved,
+                address.is_unspecified,
+            )
+        ):
+            raise ValueError("Swagger URL host must not resolve to a private or local address")
+
+
+def _read_swagger_document(swagger_url: str, allow_private_urls: bool = False, timeout: float = 15.0) -> dict[str, Any]:
+    _assert_safe_swagger_url(swagger_url, allow_private_urls=allow_private_urls)
+    with urlopen(swagger_url, timeout=timeout) as response:  # noqa: S310 - validated URL with explicit timeout.
         payload = response.read().decode("utf-8")
         content_type = response.headers.get("Content-Type", "")
     if "json" in content_type:
@@ -275,7 +305,7 @@ def _resolve_reference(document: dict[str, Any], reference: str) -> Any:
         raise ValueError(f"Only local schema references are supported: {reference}")
     value: Any = document
     for fragment in reference[2:].split("/"):
-        value = value[fragment]
+        value = value[fragment.replace("~1", "/").replace("~0", "~")]
     return value
 
 
@@ -308,9 +338,13 @@ def _response_schema(document: dict[str, Any], operation: dict[str, Any]) -> dic
     return {"type": "object"}
 
 
-def generate_from_swagger_url(swagger_url: str, suite_name: str = "Generated API Suite") -> dict[str, Any]:
+def generate_from_swagger_url(
+    swagger_url: str,
+    suite_name: str = "Generated API Suite",
+    allow_private_urls: bool = False,
+) -> dict[str, Any]:
     """Generate Robot Framework API scaffolding from a Swagger or OpenAPI URL."""
-    document = _read_swagger_document(swagger_url)
+    document = _read_swagger_document(swagger_url, allow_private_urls=allow_private_urls)
     if not (document.get("swagger") or document.get("openapi")):
         raise ValueError("Document is not a Swagger or OpenAPI definition")
     paths = document.get("paths")
@@ -327,6 +361,11 @@ def generate_from_swagger_url(swagger_url: str, suite_name: str = "Generated API
         f"Resource    ../resources/{suite_stub}.resource",
         "",
         "*** Test Cases ***",
+    ]
+    settings_lines = [
+        "*** Settings ***",
+        "Library    RequestsLibrary",
+        "Library    robotframework_mcp_server.schema_validation.SchemaValidationLibrary",
     ]
     variable_lines = [
         "*** Variables ***",
@@ -374,7 +413,7 @@ def generate_from_swagger_url(swagger_url: str, suite_name: str = "Generated API
     if not generated_operations:
         raise ValueError("Swagger or OpenAPI definition does not contain supported HTTP operations")
 
-    resource_content = "\n".join(variable_lines + [""] + keyword_lines).strip() + "\n"
+    resource_content = "\n".join(settings_lines + [""] + variable_lines + [""] + keyword_lines).strip() + "\n"
     files = {
         f"tests/{suite_slug}.robot": "\n".join(suite_lines).strip() + "\n",
         f"resources/{suite_stub}.resource": resource_content,
