@@ -169,6 +169,7 @@ class SwaggerGenerationTests(unittest.TestCase):
         self.assertIn("    ${payload}=    Evaluate    $response.json()", resource)
         self.assertIn("Response Should Match Schema File", resource)
         self.assertIn("Scenario: List Pets", suite)
+        self.assertIn("${response}=    When client sends GET request to /pets using api", suite)
         self.assertIn('"type": "array"', schema_text)
 
     def test_schema_validation_library_validates_generated_schema(self) -> None:
@@ -194,6 +195,10 @@ class SwaggerGenerationTests(unittest.TestCase):
             )
         with self.assertRaises(AssertionError):
             validator.response_should_match_schema(True, {"type": "integer"})
+        with self.assertRaises(AssertionError):
+            validator.response_should_match_schema(None, {"type": "integer"})
+        with self.assertRaises(AssertionError):
+            validator.response_should_match_schema([], {"type": "object"})
 
 
 class ServerRegistrationTests(unittest.TestCase):

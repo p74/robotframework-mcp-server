@@ -19,7 +19,9 @@ class SchemaValidationLibrary:
     def _validate(self, payload: Any, schema: Any, path: str) -> None:
         if not isinstance(schema, dict):
             return
-        if payload is None and (schema.get("nullable") or "null" in schema.get("type", [])):
+        schema_type = schema.get("type")
+        schema_types = schema_type if isinstance(schema_type, list) else [schema_type] if schema_type else []
+        if payload is None and (schema.get("nullable") or "null" in schema_types):
             return
         if "oneOf" in schema and not any(self._matches(payload, option, path) for option in schema["oneOf"]):
             raise AssertionError(f"{path} did not satisfy any oneOf schema option")
@@ -31,7 +33,6 @@ class SchemaValidationLibrary:
         if "enum" in schema and payload not in schema["enum"]:
             raise AssertionError(f"{path} expected one of {schema['enum']!r} but got {payload!r}")
 
-        schema_type = schema.get("type")
         if isinstance(schema_type, list):
             non_null_types = [item for item in schema_type if item != "null"]
             schema_type = non_null_types[0] if non_null_types else None

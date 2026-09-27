@@ -264,7 +264,14 @@ def _assert_safe_swagger_url(swagger_url: str, allow_private_urls: bool) -> None
         return
 
     try:
-        resolved = {entry[4][0] for entry in socket.getaddrinfo(parsed.hostname, parsed.port or 80, proto=socket.IPPROTO_TCP)}
+        resolved = {
+            entry[4][0]
+            for entry in socket.getaddrinfo(
+                parsed.hostname,
+                parsed.port or (443 if parsed.scheme == "https" else 80),
+                proto=socket.IPPROTO_TCP,
+            )
+        }
     except socket.gaierror as error:
         raise ValueError(f"Unable to resolve Swagger URL host: {parsed.hostname}") from error
 
@@ -405,7 +412,7 @@ def generate_from_swagger_url(
             keyword_lines.append("")
             suite_lines.append(f"Scenario: {operation_title}")
             suite_lines.append("    Given API session api is available")
-            suite_lines.append(f"    ${{response}}=    {_example_step(f'When client sends {method.upper()} request to {robot_path} using ${{session_alias}}')}")
+            suite_lines.append(f"    ${{response}}=    {_example_step(f'When client sends {method.upper()} request to {robot_path} using api')}")
             suite_lines.append(f"    Then response for {operation_title} matches schema ${{response}}")
             suite_lines.append("")
             generated_operations.append(operation_name)
