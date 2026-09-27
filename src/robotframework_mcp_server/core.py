@@ -299,7 +299,7 @@ def _read_swagger_document(swagger_url: str, allow_private_urls: bool = False, t
     _assert_safe_swagger_url(swagger_url, allow_private_urls=allow_private_urls)
     opener = build_opener(_NoRedirectHandler())
     with opener.open(swagger_url, timeout=timeout) as response:  # noqa: S310 - validated URL with explicit timeout and redirects disabled.
-        payload = response.read().decode("utf-8")
+        payload = response.read().decode(response.headers.get_content_charset() or "utf-8")
         content_type = response.headers.get("Content-Type", "")
     if "json" in content_type:
         document = json.loads(payload)
@@ -322,13 +322,21 @@ def _resolve_reference(document: dict[str, Any], reference: str) -> Any:
     return value
 
 
-def _dereference_schema(document: dict[str, Any], schema: Any) -> Any:
+def _dereference_schema(document: dict[str, Any], schema: Any, seen_references: set[str] | None = None) -> Any:
+    seen_references = seen_references or set()
     if isinstance(schema, dict):
         if "$ref" in schema:
-            return _dereference_schema(document, _resolve_reference(document, schema["$ref"]))
-        return {key: _dereference_schema(document, value) for key, value in schema.items()}
+            reference = schema["$ref"]
+            if reference in seen_references:
+                raise ValueError(f"Cyclic schema reference detected: {reference}")
+            return _dereference_schema(
+                document,
+                _resolve_reference(document, reference),
+                seen_references | {reference},
+            )
+        return {key: _dereference_schema(document, value, seen_references) for key, value in schema.items()}
     if isinstance(schema, list):
-        return [_dereference_schema(document, item) for item in schema]
+        return [_dereference_schema(document, item, seen_references) for item in schema]
     return schema
 
 
@@ -417,7 +425,7 @@ def generate_from_swagger_url(
             schema_var = f"${{{operation_slug.replace('-', '_').upper()}_SCHEMA_PATH}}"
             schema = _response_schema(document, operation)
             schema_files[schema_path] = json.dumps(schema, indent=2, sort_keys=True) + "\n"
-            variable_lines.append(f"{schema_var}    ${{CURDIR}}${{/}}..${{/}}..${{/}}{schema_path.replace('/', '${/}')}")
+            variable_lines.append(f"{schema_var}    ${{CURDIR}}${{/}}..${{/}}{schema_path.replace('/', '${/}')}")
             keyword_lines.append(f"When client sends {method.upper()} request to {robot_path} using ${{session_alias}}")
             keyword_lines.append(f"    ${{response}}=    {method.upper()} On Session    ${{session_alias}}    {robot_path}")
             keyword_lines.append("    RETURN    ${response}")

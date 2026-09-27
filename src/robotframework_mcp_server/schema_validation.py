@@ -15,8 +15,7 @@ class SchemaValidationLibrary:
         self.response_should_match_schema(payload, schema)
 
     def response_should_match_schema(self, payload: Any, schema: Any) -> None:
-        parsed_payload = json.loads(payload) if isinstance(payload, str) else payload
-        self._validate(parsed_payload, schema, path="$")
+        self._validate(payload, schema, path="$")
 
     def _validate(self, payload: Any, schema: Any, path: str) -> None:
         if not isinstance(schema, dict):

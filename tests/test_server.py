@@ -165,7 +165,7 @@ class SwaggerGenerationTests(unittest.TestCase):
 
         self.assertIn("*** Settings ***", resource)
         self.assertIn("Library    RequestsLibrary", resource)
-        self.assertIn("${LIST_PETS_SCHEMA_PATH}    ${CURDIR}${/}..${/}..${/}schemas${/}list-pets.schema.json", resource)
+        self.assertIn("${LIST_PETS_SCHEMA_PATH}    ${CURDIR}${/}..${/}schemas${/}list-pets.schema.json", resource)
         self.assertIn("When client sends GET request to /pets using ${session_alias}", resource)
         self.assertIn("Then response for List Pets matches schema ${response}", resource)
         self.assertIn("    ${payload}=    Evaluate    ${response}.json()", resource)
@@ -201,6 +201,7 @@ class SwaggerGenerationTests(unittest.TestCase):
             validator.response_should_match_schema(None, {"type": "integer"})
         with self.assertRaises(AssertionError):
             validator.response_should_match_schema([], {"type": "object"})
+        validator.response_should_match_schema("ok", {"type": "string"})
         validator.response_should_match_schema(Decimal("1.5"), {"type": "number"})
 
     def test_generate_from_swagger_url_rejects_redirects(self) -> None:
@@ -264,6 +265,49 @@ class SwaggerGenerationTests(unittest.TestCase):
                 thread.join()
 
         self.assertEqual(result["operations"], ["listPets"])
+
+    def test_generate_from_swagger_url_rejects_cyclic_schema_references(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            spec_path = root / "swagger.json"
+            spec_path.write_text(
+                json.dumps(
+                    {
+                        "openapi": "3.0.0",
+                        "components": {"schemas": {"Node": {"$ref": "#/components/schemas/Node"}}},
+                        "paths": {
+                            "/nodes": {
+                                "get": {
+                                    "operationId": "listNodes",
+                                    "responses": {
+                                        "200": {
+                                            "description": "ok",
+                                            "content": {
+                                                "application/json": {"schema": {"$ref": "#/components/schemas/Node"}}
+                                            },
+                                        }
+                                    },
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(root)))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with self.assertRaises(ValueError):
+                    generate_from_swagger_url(
+                        f"http://127.0.0.1:{server.server_port}/swagger.json",
+                        suite_name="Node API",
+                        allow_private_urls=True,
+                    )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
 
 
 class ServerRegistrationTests(unittest.TestCase):
