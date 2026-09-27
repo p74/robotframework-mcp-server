@@ -306,6 +306,7 @@ class SwaggerGenerationTests(unittest.TestCase):
         suite = result["files"]["tests/orders-api.robot"]
         self.assertIn("When client sends GET request to /orders/{orderId} using ${session_alias}", resource)
         self.assertIn("[Arguments]    ${orderId}", resource)
+        self.assertIn("${response}=    GET On Session    ${session_alias}    /orders/${orderId}", resource)
         self.assertIn("${response}=    When client sends GET request to /orders/{orderId} using api    sample_orderId", suite)
 
     def test_generate_from_swagger_url_rejects_cyclic_schema_references(self) -> None:
@@ -326,6 +327,48 @@ class SwaggerGenerationTests(unittest.TestCase):
                                             "description": "ok",
                                             "content": {
                                                 "application/json": {"schema": {"$ref": "#/components/schemas/Node"}}
+                                            },
+                                        }
+                                    },
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(root)))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with self.assertRaises(ValueError):
+                    generate_from_swagger_url(
+                        f"http://127.0.0.1:{server.server_port}/swagger.json",
+                        suite_name="Node API",
+                        allow_private_urls=True,
+                    )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
+
+    def test_generate_from_swagger_url_reports_invalid_references(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            spec_path = root / "swagger.json"
+            spec_path.write_text(
+                json.dumps(
+                    {
+                        "openapi": "3.0.0",
+                        "paths": {
+                            "/nodes": {
+                                "get": {
+                                    "operationId": "listNodes",
+                                    "responses": {
+                                        "200": {
+                                            "description": "ok",
+                                            "content": {
+                                                "application/json": {"schema": {"$ref": "#/components/schemas/Missing"}}
                                             },
                                         }
                                     },

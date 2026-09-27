@@ -304,10 +304,10 @@ def analyse_project(project_path: str) -> dict[str, Any]:
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in SCANNABLE_EXTENSIONS | {".xls"}:
             continue
-        scanned_files += 1
         if path.suffix.lower() == ".xls":
             warnings.append(f"Skipped legacy Excel file without parser support: {path}")
             continue
+        scanned_files += 1
         if path.suffix.lower() in {".robot", ".resource"}:
             keywords = _extract_robot_keywords(path.read_text(encoding="utf-8").splitlines())
         elif path.suffix.lower() in {".txt", ".md"}:
@@ -407,8 +407,11 @@ def _resolve_reference(document: dict[str, Any], reference: str) -> Any:
     if not reference.startswith("#/"):
         raise ValueError(f"Only local schema references are supported: {reference}")
     value: Any = document
-    for fragment in reference[2:].split("/"):
-        value = value[fragment.replace("~1", "/").replace("~0", "~")]
+    try:
+        for fragment in reference[2:].split("/"):
+            value = value[fragment.replace("~1", "/").replace("~0", "~")]
+    except (KeyError, TypeError) as error:
+        raise ValueError(f"Unable to resolve schema reference: {reference}") from error
     return value
 
 
@@ -505,7 +508,6 @@ def generate_from_swagger_url(
     generated_operations: list[str] = []
 
     for path, path_item in paths.items():
-        robot_path = _robotise_path(path)
         path_parameters = _path_parameters(path)
         if not isinstance(path_item, dict):
             continue
@@ -513,6 +515,7 @@ def generate_from_swagger_url(
             operation = path_item.get(method)
             if not isinstance(operation, dict):
                 continue
+            request_path = _robotise_path(path)
             operation_name = _operation_name(method, path, operation)
             operation_slug = slugify(operation_name)
             operation_title = titleize(operation_name)
@@ -524,7 +527,7 @@ def generate_from_swagger_url(
             keyword_lines.append(f"When client sends {method.upper()} request to {path} using ${{session_alias}}")
             if path_parameters:
                 keyword_lines.append("    [Arguments]    " + "    ".join(f"${{{parameter}}}" for parameter in path_parameters))
-            keyword_lines.append(f"    ${{response}}=    {method.upper()} On Session    ${{session_alias}}    {robot_path}")
+            keyword_lines.append(f"    ${{response}}=    {method.upper()} On Session    ${{session_alias}}    {request_path}")
             keyword_lines.append("    RETURN    ${response}")
             keyword_lines.append("")
             keyword_lines.append(f"Then response for {operation_title} matches schema ${{response}}")
